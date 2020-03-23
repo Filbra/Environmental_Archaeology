@@ -1,0 +1,353 @@
+
+
+
+
+# Start R from within a GRASS session
+
+setwd("F:/R_Project/Po_Plain")
+
+## Load Required Packages ##
+
+library(rgrass7)
+library(spatstat)
+library(MASS)
+library(sp)
+library(maptools)
+library(MuMIn)
+library(raster)
+library(ggplot2)
+library(ggspatial)
+library(gridExtra)
+
+# Importing raster files (covariates) and region from GRASS
+
+poplain<-readRAST(c("DEM50","MTI","soil","VAEcost"),cat=c(F,F,F,F),plugin=F)
+str(poplain)
+
+# Importing sites from GRASS 
+
+prj_area<-readVECT("mask",plugin=F)
+
+roman<-readVECT("roman_sites",plugin=F)
+head(data.frame(roman))
+
+medieval<-readVECT("medieval_sites",plugin=F)
+head(data.frame(roman))
+
+# Save GRASS files loaded into R
+
+save(poplain,prj_area,roman,medieval,file="PoPlain.RData")
+
+# Setting the working region
+
+region<-as(as(prj_area,"SpatialPolygons"),"owin")
+
+# Convert covariates to objects of class image and create list
+
+covar<-list(DEM=as.im(poplain["DEM50"]),MTI=as.im(poplain["MTI"]),
+            Soil=as.im(poplain["soil"]),VAE=as.im(poplain["VAEcost"]))
+
+# Testing Collinearity between MTI (M) and Soil (S)
+
+MS <- stack((raster(poplain["MTI"])),(raster(poplain["soil"])))
+
+RandomMS<- as.data.frame((sampleRandom(MS, 300)))
+
+coll_test <- cor((RandomMS$MTI),(RandomMS$soil),
+    method = "pearson")
+
+  #Export test summary
+
+write.table(capture.output(print(coll_test)),file="Coll_test.txt")
+
+# Converting site locations to point pattern process
+
+roman_ppp<-as.ppp(coordinates(roman),region)
+medieval_ppp<-as.ppp(coordinates(medieval),region)
+
+# Model 0: homogeneous point process
+
+roman_mod0<-ppm(roman_ppp)
+medieval_mod0<-ppm(medieval_ppp)
+
+# Model 1: semi-parametric inhomogeneous point process depends on geography
+
+roman_mod1<-ppm(roman_ppp,~MTI+Soil,covariates=covar)
+medieval_mod1<-ppm(medieval_ppp,~MTI+Soil,covariates=covar)
+
+# Model 2: semi-parametric inhomogeneous point process depend on distances Via Aemilia
+
+roman_mod2<-ppm(roman_ppp,~VAE, covariates = covar)
+medieval_mod2<-ppm(medieval_ppp,~VAE, covariates = covar)
+
+# Bayesian Information Criterion (BIC): stepwise variable selection
+
+roman_mod1BIC<-stepAIC(roman_mod1,k=log(length(roman)))
+medieval_mod1BIC<-stepAIC(medieval_mod1,k=log(length(medieval)))
+
+# Create model lists
+
+roman_models<-list(model0=roman_mod0,model1=roman_mod1BIC,model2=roman_mod2)
+medieval_models<-list(model0=medieval_mod0,model1=medieval_mod1BIC,model2=medieval_mod2)
+
+# Export model summary
+
+write.table(capture.output(print(roman_models)),file="Roman_Models.txt")
+write.table(capture.output(print(medieval_models)),file="Medieval_Models.txt")
+
+# Compare BIC scores for the different models
+
+roman_BIC<-lapply(roman_models,BIC)
+write.table(roman_BIC,file="Roman_BIC_Models_scores.txt")
+medieval_BIC<-lapply(medieval_models,BIC)
+write.table(medieval_BIC,file="Medieval_BIC_Models_scores.txt")
+
+# BIC weight for diferent models
+
+AIC.BIC.weight<-function(x){
+  for(i in 1:length(x)){
+    x.vect<-as.numeric(c(x[1:i]))}
+  delta<-x.vect-min(x.vect)
+  L<-exp(-0.5*delta)
+  result<-round(L/sum(L),digits=7)
+  return(result)
+}
+
+write.table(AIC.BIC.weight(roman_BIC[1:2]),file="Roman_BIC_Models01_weights.txt")
+write.table(AIC.BIC.weight(medieval_BIC[1:2]),file="Medieval_BIC_Models01_weights.txt")
+write.table(AIC.BIC.weight(roman_BIC[1:3]),file="Roman_BIC_Models02_weights.txt")
+write.table(AIC.BIC.weight(medieval_BIC[1:3]),file="Medieval_BIC_Models02_weights.txt")
+
+
+## BIVARIATE RIPLEY'S "K" FUNCTION ##
+
+# Create marked ppp
+
+valR<-paste(rep("Rom",length(roman)))
+valM<-paste(rep("Med",length(medieval)))
+val<-c(valR,valM)
+
+X<-c(coordinates(roman)[,1],coordinates(medieval)[,1])
+Y<-c(coordinates(roman)[,2],coordinates(medieval)[,2])
+
+sites<-ppp(X,Y,region,marks=as.factor(val))
+rjitter(sites,0.5)
+
+
+# Homogeneous Cross-K Function
+
+sites_kcross<-envelope(sites,Kcross,i="Med",j="Rom",r=seq(0,3000,100),
+                       correction="trans",nsim=999)
+
+# Estimate bandwith for intensity maps
+
+distR<-dist(coordinates(roman))
+distM<-dist(coordinates(medieval))
+
+quantile(distR,c(.1,.2,.3))
+quantile(distM,c(.1,.2,.3))
+
+lambdaR1<-density.ppp(roman_ppp,sigma=3500)
+lambdaR2<-density.ppp(roman_ppp,sigma=5500)
+lambdaR3<-density.ppp(roman_ppp,sigma=8000)
+
+lambdaM1<-density.ppp(medieval_ppp,sigma=5500)
+lambdaM2<-density.ppp(medieval_ppp,sigma=8500)
+lambdaM3<-density.ppp(medieval_ppp,sigma=11500)
+
+
+# Inhomogeneous Cross-K Function
+
+sites_kinhom<-envelope(sites,Kcross.inhom,i="Med",j="Rom",correction="trans",
+                       sigma=c(8500,5500),r=seq(0,3000,100),nsim=999)
+
+
+# Residual Values
+
+ResR1<-residuals.ppm(roman_mod1BIC,drop=T)
+ResR1
+plot.msr(ResR1)
+
+ResR2<-residuals.ppm(roman_mod2,drop=T)
+ResR2
+plot.msr(ResR2)
+
+ResM1<-residuals.ppm(medieval_mod1,drop = T)
+ResM1
+plot.msr(ResM1)
+
+ResM2<-residuals.ppm(medieval_mod2,drop = T)
+ResM2
+plot.msr(ResM2)
+
+
+#PLOTTING IMAGES
+#Plot DEM map with GGPLOT2"
+DEM<- raster(poplain["DEM50"])
+Demdf<- data.frame(rasterToPoints(DEM))
+colnames(Demdf)<-c("X","Y","Elevation")
+head(Demdf)
+contours<-readVECT("contour",plugin=F)
+contours_df<- fortify(contours, region = "id")
+Sites_R<-fortify(data.frame(roman))
+Sites_M<-fortify(data.frame(medieval))
+
+
+tiff("DEM.tif",width=2000,height=1500,res= 300)
+DEM_map <- ggplot(Demdf, aes(x=X, y=Y)) + geom_tile(aes(fill = Elevation))+
+  scale_fill_distiller(type = "seq",palette = "Spectral", 
+                       guide = "colourbar", aesthetics = "fill")+
+  labs(x = "",y = "")+
+  annotation_scale(location = "br", line_width = 0.5, 
+                   height = unit(0.15,"cm"))+
+  annotation_north_arrow(location = "tl", height = unit(1.5,"cm"),
+                         width = unit(1, "cm"),
+                         pad_x = unit(0.25,"cm"), 
+                         pad_y = unit(0.25, "cm"), 
+                         rotation = NULL,style = north_arrow_fancy_orienteering, 
+                         which_north = "true")+
+  geom_point(data = Sites_R, aes(x=coords.x1, y=coords.x2), 
+             shape= 23, size= 1.5, colour= "Black", bg="Yellow")+
+  geom_point(data = Sites_M, aes(x=coords.x1, y=coords.x2), 
+             shape= 24, size= 1.5, colour= "Black", bg="Red")+
+  coord_equal()
+print(DEM_map)
+dev.off()
+
+# Creating maps covariates with GGPLOT2
+MTIr<- raster(poplain["MTI"])
+MTIdf<- data.frame(rasterToPoints(MTIr))
+colnames(MTIdf) <- c("x","y","value")
+head(MTIdf)
+
+Soilr<- raster(poplain["soil"])
+Soildf<- data.frame(rasterToPoints(Soilr))
+colnames(Soildf) <- c("x","y","value")
+head(Soildf)
+
+VAEr<- raster(poplain["VAEcost"])
+VAEdf<- data.frame(rasterToPoints(VAEr))
+colnames(VAEdf) <- c("x","y","value")
+head(VAEdf)
+
+tiff("Covariates.tif",width=4000,height=1000, res = 150)
+
+M<-ggplotGrob(ggplot(MTIdf, aes(x=x, y=y)) + geom_tile(aes(fill = value))+
+                   scale_fill_distiller(type = "seq",palette = "BrBG", 
+                                        guide = "colourbar", aesthetics = "fill")+
+                   labs(title = "Modified Topographic Index", x = "",y = "")+
+                theme_grey(base_size = 15)+
+                coord_fixed())
+S<-ggplotGrob(ggplot(Soildf, aes(x=x, y=y)) + geom_tile(aes(fill = value))+
+                scale_fill_distiller(type = "seq",palette = "BrBG", 
+                                     guide = "colourbar", aesthetics = "fill")+
+                labs(title = "Soil Texture", x = "",y = "")+
+                theme_grey(base_size = 15)+
+                coord_fixed())
+V<-ggplotGrob(ggplot(VAEdf, aes(x=x, y=y)) + geom_tile(aes(fill = value))+
+                scale_fill_distiller(type = "seq",palette = "BrBG", 
+                                     guide = "colourbar", aesthetics = "fill")+
+                labs(title = "Distance from Via Aemilia", x = "",y = "")+
+                theme_grey(base_size = 15)+
+                coord_fixed())
+grid.arrange(M,S,V,
+             widths = c(1,1,1),
+             layout_matrix = rbind(c(1, 2, 3)))
+dev.off()
+
+
+#Plot density maps - Bandwidth Estimation with GGPLOT2
+
+R1<- fortify(data.frame(lambdaR1))
+R2<- fortify(data.frame(lambdaR2))
+R3<- fortify(data.frame(lambdaR3))
+M1<- fortify(data.frame(lambdaM1))
+M2<- fortify(data.frame(lambdaM2))
+M3<- fortify(data.frame(lambdaM3))
+
+tiff("Bandwidth Estimation.tif",width=4000,height=1500, res = 300)
+
+KDR1<-ggplotGrob(ggplot(R1, aes(x=x, y=y)) + geom_tile(aes(fill = value))+
+  scale_fill_distiller(type = "seq",palette = "Spectral", 
+                       guide = "colourbar", aesthetics = "fill")+
+  labs(title = "Roman bw=3500", adj= 1, x = "",y = "")+coord_fixed())
+KDR2<-ggplotGrob(ggplot(R2, aes(x=x, y=y)) + geom_tile(aes(fill = value))+
+  scale_fill_distiller(type = "seq",palette = "Spectral", 
+                       guide = "colourbar", aesthetics = "fill")+
+  labs(title = "Roman bw=5500", x = "",y = "")+coord_fixed())
+KDR3<-ggplotGrob(ggplot(R3, aes(x=x, y=y)) + geom_tile(aes(fill = value))+
+  scale_fill_distiller(type = "seq",palette = "Spectral", 
+                       guide = "colourbar", aesthetics = "fill")+
+  labs(title = "Roman bw=8500", x = "",y = "")+coord_fixed())
+KDM1<-ggplotGrob(ggplot(M1, aes(x=x, y=y)) + geom_tile(aes(fill = value))+
+                   scale_fill_distiller(type = "seq",palette = "Spectral", 
+                                        guide = "colourbar", aesthetics = "fill")+
+                   labs(title = "Medieval bw=5500", x = "",y = "")+coord_fixed())
+KDM2<-ggplotGrob(ggplot(M2, aes(x=x, y=y)) + geom_tile(aes(fill = value))+
+                   scale_fill_distiller(type = "seq",palette = "Spectral", 
+                                        guide = "colourbar", aesthetics = "fill")+
+                   labs(title = "Medieval bw=8500", x = "",y = "")+coord_fixed())
+KDM3<-ggplotGrob(ggplot(M3, aes(x=x, y=y)) + geom_tile(aes(fill = value))+
+                   scale_fill_distiller(type = "seq",palette = "Spectral", 
+                                        guide = "colourbar", aesthetics = "fill")+
+                   labs(title = "Medieval bw=11500", x = "",y = "")+coord_fixed())
+grid.arrange(KDR1,KDR2,KDR3,KDM1,KDM2,KDM3,
+             widths = c(1,1,1),
+             layout_matrix = rbind(c(1, 2, 3),
+                                   c(4, 5, 6)))
+dev.off()
+
+#Plot Results
+
+aggr<-sites_kinhom$r[sites_kinhom$obs>sites_kinhom$hi]
+
+tiff("KCross-Hom_Inhom.tif",width=6000,height=3000,units="px",res=550)
+par(mar=c(5,5,5,3))
+par(mfrow=c(1,2))
+plot(sites_kcross,main="Homogeneous Cross-K Function",xlab="Distance (m)",ylab="K function",
+     legend=F)
+legend("topleft",legend=c("Observed","Expected","Confidence Envelope"),lty=c(1,2,NA),
+       col=c(1,2,"lightgrey"),lwd=c(1,1,NA),pch=c(NA,NA,15),cex=0.8,pt.cex=1.5,
+       y.intersp=1.5)
+plot(sites_kinhom$r,sites_kinhom$hi,type="n",main="Inhomogeneous Cross-K Function",
+     xlab="Distance (m)",ylab="K function")
+rect(xleft=0,xright=1300,ybottom=0,ytop=(sites_kinhom$obs[sites_kinhom$r==1300]),
+     col=rgb(1,0,0,alpha=0.07),border=NA)
+polygon(x=c(sites_kinhom$r,rev(sites_kinhom$r)),y=c(sites_kinhom$hi,rev(sites_kinhom$lo)),
+        col="#C0C0C0",border=NA)
+lines(sites_kinhom$r,sites_kinhom$theo,lty=2,col=2,lwd=1)
+lines(sites_kinhom$r,sites_kinhom$obs,lty=1,col=1,lwd=1)
+legend("topleft",legend=c("Observed","Expected","Confidence Envelope","Aggregation"),
+       lty=c(1,2,NA,NA),col=c(1,2,"#C0C0C0",rgb(1,0,0,alpha=0.1)),
+       lwd=c(1,1,NA,NA),pch=c(NA,NA,15,15),cex=0.8,pt.cex=1.5,y.intersp=1.5)
+dev.off()
+par(mfrow=c(1,1))
+
+# Plot Residual Values ResR1 and ResM1
+
+ValResR<- fortify(data.frame(Smooth(ResR1)))
+ValResR[,3]<-ValResR[,3]*10^7
+ValResM<- fortify(data.frame(Smooth(ResM1)))
+ValResM[,3]<-ValResM[,3]*10^7
+
+
+
+tiff("Residual Values.tif",width=3000,height=1500,res = 300)
+
+ValR<-ggplotGrob(ggplot(ValResR, aes(x=x, y=y, z=value)) + geom_tile(aes(fill = value))+
+                   scale_fill_distiller(type = "seq",palette = "Spectral", 
+                                        guide = "colourbar", aesthetics = "fill")+
+                   
+                   stat_contour(colour="grey")+
+                   labs(title = "Residual Values Model 1R", adj= 1, x = "",y = "")+
+                   coord_fixed())
+ValM<-ggplotGrob(ggplot(ValResM, aes(x=x, y=y, z=value)) + geom_tile(aes(fill = value))+
+                   scale_fill_distiller(type = "seq",palette = "Spectral", 
+                                        guide = "colourbar", aesthetics = "fill")+
+                   stat_contour(colour="grey")+
+                   labs(title = "Residual Values Model 1M", x = "",y = "")+
+                   coord_fixed())
+grid.arrange(ValR,ValM,
+             widths = c(1,1),
+             layout_matrix = rbind(c(1, 2)))
+dev.off()
