@@ -1,6 +1,17 @@
 
+R script code developed by F. Brandolini & F. Carrer
+# to accompany the paper: 
+# Filippo Brandolini & Francesco Carrer (2020) Terra, Silva et Paludes. Assessing the Role of 
+# Alluvial Geomorphology for Late-Holocene Settlement Strategies (Po Plain – N Italy) Through Point Pattern Analysis, 
+# published in 'Environmental Archaeology', DOI: 10.1080/14614103.2020.1740866
 
+#                ------------- o -------------
 
+# The dataset used is available on the Harvard Dataverse: 
+# Brandolini, Filippo, 2020, "Late-Holocene human resilience in a fluvial environment: a geoarchaeological database 
+# for the Central Po Plain (N Italy)", https://doi.org/10.7910/DVN/JSYZ3H, Harvard Dataverse, V1
+
+#                ------------- o -------------
 
 # Start R from within a GRASS session
 
